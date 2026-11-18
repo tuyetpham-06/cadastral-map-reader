@@ -22,7 +22,7 @@ def get_land_type(text):
     up = text.upper().replace('*', '+')
     if 'ODT+CLN' in up or (('ODT' in up or 'DT' in up) and 'CLN' in up):
         return 'ODT+CLN'
-    if 'BHK' in up or '8HK' in up:
+    if 'BHK' in up or '8HK' in up or '39K' in up:
         return 'BHK'
     if 'LUC' in up:
         return 'LUC'
@@ -39,14 +39,21 @@ def get_land_type(text):
 def parse_label_accurate(lines):
     full = ' '.join(lines)
     full = re.sub(r'(\d+)\s*[zZ]\s*(\d)\b', r'\1.\2', full)
+    full = re.sub(r'(\d+)[,–\-](\d+)', r'\1.\2', full)
+    full = re.sub(r'(\d+)\.\s+(\d+)', r'\1.\2', full)
     full = full.replace('*', '+')
 
     floats = re.findall(r'\b\d+\.\d+\b', full)
     if not floats:
         return None, None, None
-    dt = float(floats[0])
+    valid_floats = [float(f) for f in floats if 10.0 <= float(f) <= 99999.0]
+    if not valid_floats:
+        return None, None, None
+    dt = valid_floats[0]
 
-    text_no_dt = full.replace(floats[0], ' ')
+    text_no_dt = full
+    for f in floats:
+        text_no_dt = text_no_dt.replace(f, ' ')
     l_type = get_land_type(text_no_dt)
 
     ints = re.findall(r'\b\d{2,4}\b', text_no_dt)
@@ -56,20 +63,21 @@ def parse_label_accurate(lines):
         return None, None, None
 
     thua = int(ints[0])
-    if thua >= 10 and dt >= 10.0:
+    if thua >= 1 and dt >= 10.0:
         return l_type, thua, dt
 
     return None, None, None
 
-def build_grid_image(image_list, cell_w=300, cell_h=90, cols=3):
+def build_grid_image(image_list, cell_w=420, cell_h=190, cols=3):
     n = len(image_list)
     rows = (n + cols - 1) // cols
     grid = Image.new('RGB', (cols * cell_w, rows * cell_h), 'white')
     for idx, img in enumerate(image_list):
-        resized = img.resize((cell_w, cell_h))
         c = idx % cols
         r = idx // cols
-        grid.paste(resized, (c * cell_w, r * cell_h))
+        x_off = c * cell_w + max(0, (cell_w - img.width) // 2)
+        y_off = r * cell_h + max(0, (cell_h - img.height) // 2)
+        grid.paste(img, (x_off, y_off))
     return grid, cell_w, cell_h, cols, n
 
 async def run_winrt_grid_ocr(grid_img, cell_w, cell_h, cols, total_n):
@@ -106,8 +114,8 @@ def run_tesseract_grid_ocr(grid_img, cell_w, cell_h, cols, total_n):
     import pytesseract
     results = [[] for _ in range(total_n)]
     try:
-        # Run Tesseract EXACTLY ONCE on the stitched grid
-        data = pytesseract.image_to_data(grid_img, config='--psm 6', output_type=pytesseract.Output.DICT)
+        # Run Tesseract with sparse text mode (--psm 11) for accurate bounding box detection
+        data = pytesseract.image_to_data(grid_img, config='--psm 11 --oem 1', output_type=pytesseract.Output.DICT)
         n_boxes = len(data['text'])
         for i in range(n_boxes):
             text = data['text'][i].strip()
@@ -158,7 +166,7 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
         if len(items) == 1 and items[0][0] == 'l':
             p1, p2 = items[0][1], items[0][2]
             length = math.hypot(p2.x - p1.x, p2.y - p1.y)
-            if 18.0 <= length <= 33.0:
+            if 16.0 <= length <= 38.0:
                 angle = math.degrees(math.atan2(p2.y - p1.y, p2.x - p1.x))
                 angle = (angle + 90) % 180 - 90
                 cx = (p1.x + p2.x) / 2
