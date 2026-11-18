@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+cloudflared.exe
+uploads/
+previews/
+tmp_process/
+tmp_crops/
+.env
+.venv
+

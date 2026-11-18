@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.git
+.github
+.vscode
+cloudflared.exe
+*.bat
+uploads/*
+!uploads/.gitkeep
+previews/*
+!previews/.gitkeep
+tmp_crops
+tmp_process
+

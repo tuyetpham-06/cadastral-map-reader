@@ -1,0 +1,14 @@
+def electricity_bill(kwh):
+    if kwh <0:
+     print("So dien kh am!")
+    elif kwh <=50:
+        money=kwh*1800
+    elif kwh <=100:
+       money = 50*1800+(kwh-50)*2200
+    else:
+       money = 50*1800 + 50*2200+(kwh-100)*3000
+    print("So tien dien phai tra: {:,.0f}".format(money))
+def main():
+   kwh=float(input("nhap so dien tieu thu:"))
+   electricity_bill(kwh)
+main()
