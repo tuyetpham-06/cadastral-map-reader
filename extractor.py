@@ -38,23 +38,17 @@ def get_land_type(text):
 
 def parse_label_accurate(lines):
     full = ' '.join(lines)
-    # Fix common OCR artifacts for digits like '41 z 2' -> '417.2'
     full = re.sub(r'(\d+)\s*[zZ]\s*(\d)\b', r'\1.\2', full)
     full = full.replace('*', '+')
 
-    # 1. Tìm diện tích (bắt buộc phải là số thực có phần thập phân: ví dụ 105.8, 417.2, 501.2)
     floats = re.findall(r'\b\d+\.\d+\b', full)
     if not floats:
         return None, None, None
     dt = float(floats[0])
 
-    # 2. Xóa chuỗi diện tích khỏi văn bản để tránh lấy nhầm các chữ số của diện tích làm số thửa
     text_no_dt = full.replace(floats[0], ' ')
-
-    # 3. Lấy loại đất chuẩn
     l_type = get_land_type(text_no_dt)
 
-    # 4. Tìm số thửa (là số nguyên từ 10 đến 9999 hoặc 1 đến 9999)
     ints = re.findall(r'\b\d{2,4}\b', text_no_dt)
     if not ints:
         ints = re.findall(r'\b\d{1,4}\b', text_no_dt)
@@ -62,57 +56,90 @@ def parse_label_accurate(lines):
         return None, None, None
 
     thua = int(ints[0])
-
-    # Thửa đất và diện tích phải hợp lệ
-    if thua >= 1 and dt >= 5.0:
+    if thua >= 10 and dt >= 10.0:
         return l_type, thua, dt
 
     return None, None, None
 
-async def run_ocr_winrt_multi(image_list, engine):
+def build_grid_image(image_list, cell_w=300, cell_h=90, cols=3):
+    n = len(image_list)
+    rows = (n + cols - 1) // cols
+    grid = Image.new('RGB', (cols * cell_w, rows * cell_h), 'white')
+    for idx, img in enumerate(image_list):
+        resized = img.resize((cell_w, cell_h))
+        c = idx % cols
+        r = idx // cols
+        grid.paste(resized, (c * cell_w, r * cell_h))
+    return grid, cell_w, cell_h, cols, n
+
+async def run_winrt_grid_ocr(grid_img, cell_w, cell_h, cols, total_n):
+    from winsdk.windows.media.ocr import OcrEngine
     from winsdk.windows.graphics.imaging import BitmapDecoder
     from winsdk.windows.storage import StorageFile
 
-    results = []
-    for idx, img in enumerate(image_list):
-        tmp_p = f'_tmp_crop_{idx}.png'
-        img.save(tmp_p)
-        try:
-            f = await StorageFile.get_file_from_path_async(os.path.abspath(tmp_p))
-            stream = await f.open_async(0)
-            dec = await BitmapDecoder.create_async(stream)
-            sb = await dec.get_software_bitmap_async()
-            res = await engine.recognize_async(sb)
-            results.append([l.text.strip() for l in res.lines if l.text.strip()])
-        except Exception:
-            results.append([])
-        finally:
-            if os.path.exists(tmp_p):
-                try: os.remove(tmp_p)
-                except: pass
+    tmp_p = '_tmp_grid_win.png'
+    grid_img.save(tmp_p)
+    results = [[] for _ in range(total_n)]
+    try:
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        f = await StorageFile.get_file_from_path_async(os.path.abspath(tmp_p))
+        stream = await f.open_async(0)
+        dec = await BitmapDecoder.create_async(stream)
+        sb = await dec.get_software_bitmap_async()
+        res = await engine.recognize_async(sb)
+        for line in res.lines:
+            for w in line.words:
+                cx = w.bounding_rect.x + w.bounding_rect.width / 2
+                cy = w.bounding_rect.y + w.bounding_rect.height / 2
+                c = int(cx // cell_w)
+                r = int(cy // cell_h)
+                idx = r * cols + c
+                if 0 <= idx < total_n:
+                    results[idx].append(w.text)
+    finally:
+        if os.path.exists(tmp_p):
+            try: os.remove(tmp_p)
+            except: pass
     return results
 
-def run_ocr_tesseract_multi(image_list):
+def run_tesseract_grid_ocr(grid_img, cell_w, cell_h, cols, total_n):
     import pytesseract
-    results = []
-    for img in image_list:
-        try:
-            text = pytesseract.image_to_string(img, config='--psm 6')
-            results.append([l.strip() for l in text.split('\n') if l.strip()])
-        except:
-            results.append([])
+    results = [[] for _ in range(total_n)]
+    try:
+        # Run Tesseract EXACTLY ONCE on the stitched grid
+        data = pytesseract.image_to_data(grid_img, config='--psm 6', output_type=pytesseract.Output.DICT)
+        n_boxes = len(data['text'])
+        for i in range(n_boxes):
+            text = data['text'][i].strip()
+            if not text:
+                continue
+            x = data['left'][i] + data['width'][i] / 2
+            y = data['top'][i] + data['height'][i] / 2
+            c = int(x // cell_w)
+            r = int(y // cell_h)
+            idx = r * cols + c
+            if 0 <= idx < total_n:
+                results[idx].append(text)
+    except Exception as e:
+        print(f"Tesseract grid error: {e}")
     return results
 
-def run_ocr_batch(image_list):
+def run_ocr_fast(image_list):
+    if not image_list:
+        return []
+    grid, cell_w, cell_h, cols, total_n = build_grid_image(image_list)
+
+    # 1. Try Windows WinRT OCR
     try:
         from winsdk.windows.media.ocr import OcrEngine
         engine = OcrEngine.try_create_from_user_profile_languages()
         if engine:
-            return asyncio.run(run_ocr_winrt_multi(image_list, engine))
+            return asyncio.run(run_winrt_grid_ocr(grid, cell_w, cell_h, cols, total_n))
     except Exception:
         pass
 
-    return run_ocr_tesseract_multi(image_list)
+    # 2. Try Linux Tesseract single-call OCR (Render Cloud)
+    return run_tesseract_grid_ocr(grid, cell_w, cell_h, cols, total_n)
 
 def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
     os.makedirs(temp_dir, exist_ok=True)
@@ -131,21 +158,20 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
         if len(items) == 1 and items[0][0] == 'l':
             p1, p2 = items[0][1], items[0][2]
             length = math.hypot(p2.x - p1.x, p2.y - p1.y)
-            if 12.0 <= length <= 40.0:
+            if 18.0 <= length <= 33.0:
                 angle = math.degrees(math.atan2(p2.y - p1.y, p2.x - p1.x))
-                # Chuẩn hóa góc nghiêng về khoảng [-90, 90] độ
                 angle = (angle + 90) % 180 - 90
-                fraction_bars.append((p1, p2, length, angle))
+                cx = (p1.x + p2.x) / 2
+                cy = (p1.y + p2.y) / 2
+                if not any(abs(cx - b[0]) < 4 and abs(cy - b[1]) < 4 for b in fraction_bars):
+                    fraction_bars.append((cx, cy, length, angle))
 
     crops = []
-    for idx, (p1, p2, length, angle) in enumerate(fraction_bars):
-        cx_pt = (p1.x + p2.x) / 2
-        cy_pt = (p1.y + p2.y) / 2
+    for cx_pt, cy_pt, length, angle in fraction_bars:
         cx_px = cx_pt * zoom
         cy_px = cy_pt * zoom
 
         rot_img = full_img.rotate(angle, center=(cx_px, cy_px), resample=Image.BICUBIC)
-        # Cắt chính xác khung bao quanh phân số và loại đất
         box_left = max(0, cx_px - 75 * zoom)
         box_top = max(0, cy_px - 22 * zoom)
         box_right = min(full_img.width, cx_px + 25 * zoom)
@@ -154,14 +180,13 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
         cropped = rot_img.crop((box_left, box_top, box_right, box_bottom))
         crops.append(cropped)
 
-    # Chạy nhận dạng OCR
-    crop_results = run_ocr_batch(crops)
+    # Fast 1-call OCR
+    crop_results = run_ocr_fast(crops)
     parcels = {}
 
-    for lines in crop_results:
-        l_type, thua, dt = parse_label_accurate(lines)
+    for words in crop_results:
+        l_type, thua, dt = parse_label_accurate(words)
         if thua and dt:
-            # Nếu chưa có thửa này hoặc thửa mới có loại đất chi tiết hơn
             if thua not in parcels or (parcels[thua]['Loại đất'] == 'ODT' and l_type != 'ODT'):
                 parcels[thua] = {
                     'Loại đất': l_type,
@@ -178,16 +203,15 @@ def extract_from_image(img_path, temp_dir='tmp_process'):
     parcels = {}
 
     rot_images = [full_img.rotate(ang, expand=True, fillcolor='white') for ang in [0, 72, 75, 90, 270, 285]]
-    results = run_ocr_batch(rot_images)
-    for lines in results:
-        for l in lines:
-            l_type, thua, dt = parse_label_accurate([l])
-            if thua and dt and thua not in parcels:
-                parcels[thua] = {
-                    'Loại đất': l_type,
-                    'Số thửa': thua,
-                    'Diện tích': dt
-                }
+    results = run_ocr_fast(rot_images)
+    for words in results:
+        l_type, thua, dt = parse_label_accurate(words)
+        if thua and dt and thua not in parcels:
+            parcels[thua] = {
+                'Loại đất': l_type,
+                'Số thửa': thua,
+                'Diện tích': dt
+            }
 
     data = list(parcels.values())
     data = sorted(data, key=lambda x: x['Số thửa'])

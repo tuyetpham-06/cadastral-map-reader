@@ -490,6 +490,10 @@ HTML_TEMPLATE = """
                     method: 'POST',
                     body: formData
                 });
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    throw new Error(`Lỗi máy chủ (${res.status}): ${errorText.substring(0, 100) || 'Hết thời gian chờ (Timeout)'}`);
+                }
                 const result = await res.json();
                 if (result.success) {
                     // Luôn chỉ hiển thị dữ liệu của file mới đọc (thay thế hoàn toàn dữ liệu cũ)
