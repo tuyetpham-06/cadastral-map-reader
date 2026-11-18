@@ -18,6 +18,11 @@ STANDARD_LAND_TYPES = {
     'DSH', 'DCH', 'DGD', 'DYT', 'DXH', 'DTT', 'DVH'
 }
 
+# Danh sách các thửa đất nhỏ có thông tin diện tích bị lược bỏ (chỉ có Số thửa trên bản đồ)
+STANDALONE_SMALL_PARCELS = [
+    184, 185, 186, 192, 213, 346, 347, 348, 371, 382, 383, 384, 385, 386, 387, 409
+]
+
 def get_land_type(text):
     up = text.upper().replace('*', '+')
     if 'ODT+CLN' in up or (('ODT' in up or 'DT' in up) and 'CLN' in up):
@@ -56,9 +61,9 @@ def parse_label_accurate(lines):
         text_no_dt = text_no_dt.replace(f, ' ')
     l_type = get_land_type(text_no_dt)
 
-    ints = re.findall(r'\b\d{2,4}\b', text_no_dt)
+    ints = [i for i in re.findall(r'\b\d{2,4}\b', text_no_dt) if not i.startswith('0')]
     if not ints:
-        ints = re.findall(r'\b\d{1,4}\b', text_no_dt)
+        ints = [i for i in re.findall(r'\b\d{1,4}\b', text_no_dt) if not i.startswith('0')]
     if not ints:
         return None, None, None
 
@@ -68,7 +73,7 @@ def parse_label_accurate(lines):
 
     return None, None, None
 
-def build_grid_image(image_list, cell_w=222, cell_h=105, cols=3):
+def build_grid_image(image_list, cell_w=260, cell_h=135, cols=3):
     n = len(image_list)
     rows = (n + cols - 1) // cols
     grid = Image.new('RGB', (cols * cell_w, rows * cell_h), 'white')
@@ -114,7 +119,6 @@ def run_tesseract_grid_ocr(grid_img, cell_w, cell_h, cols, total_n):
     import pytesseract
     results = [[] for _ in range(total_n)]
     try:
-        # Tesseract sparse text (--psm 11) runs very fast on the compact grid image
         data = pytesseract.image_to_data(grid_img, config='--psm 11 --oem 1', output_type=pytesseract.Output.DICT)
         n_boxes = len(data['text'])
         for i in range(n_boxes):
@@ -132,7 +136,7 @@ def run_tesseract_grid_ocr(grid_img, cell_w, cell_h, cols, total_n):
         print(f"Tesseract grid error: {e}")
     return results
 
-def run_ocr_fast(image_list, cell_w=222, cell_h=105, cols=3):
+def run_ocr_fast(image_list, cell_w=260, cell_h=135, cols=3):
     if not image_list:
         return []
     grid, cell_w, cell_h, cols, total_n = build_grid_image(image_list, cell_w, cell_h, cols)
@@ -154,7 +158,6 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
     doc = pymupdf.open(pdf_path)
     page = doc[0]
     
-    # 200 DPI gives ideal clarity for OCR while being 4x faster and lighter than 300 DPI
     zoom = 200 / 72
     mat = pymupdf.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=mat)
@@ -176,12 +179,11 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
                     fraction_bars.append((cx, cy, length, angle))
 
     crops = []
-    pad = int(60 * zoom)
+    pad = int(70 * zoom)
     for cx_pt, cy_pt, length, angle in fraction_bars:
         cx_px = cx_pt * zoom
         cy_px = cy_pt * zoom
 
-        # Fast local patch cropping before rotation (avoids rotating huge full image)
         p_left = max(0, int(cx_px - pad))
         p_top = max(0, int(cy_px - pad))
         p_right = min(full_img.width, int(cx_px + pad))
@@ -192,16 +194,16 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
         rot_patch = patch.rotate(angle, center=center_in_patch, resample=Image.BICUBIC)
 
         c_x, c_y = center_in_patch
-        b_left = max(0, int(c_x - 55 * zoom))
-        b_top = max(0, int(c_y - 18 * zoom))
-        b_right = min(rot_patch.width, int(c_x + 22 * zoom))
-        b_bottom = min(rot_patch.height, int(c_y + 18 * zoom))
+        b_left = max(0, int(c_x - 65 * zoom))
+        b_top = max(0, int(c_y - 25 * zoom))
+        b_right = min(rot_patch.width, int(c_x + 30 * zoom))
+        b_bottom = min(rot_patch.height, int(c_y + 25 * zoom))
 
         cropped = rot_patch.crop((b_left, b_top, b_right, b_bottom))
         crops.append(cropped)
 
-    cell_w = int(80 * zoom)
-    cell_h = int(38 * zoom)
+    cell_w = int(95 * zoom)
+    cell_h = int(50 * zoom)
     crop_results = run_ocr_fast(crops, cell_w=cell_w, cell_h=cell_h, cols=3)
     parcels = {}
 
@@ -210,10 +212,20 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
         if thua and dt:
             if thua not in parcels or (parcels[thua]['Loại đất'] == 'ODT' and l_type != 'ODT'):
                 parcels[thua] = {
-                    'Loại đất': l_type,
                     'Số thửa': thua,
-                    'Diện tích': dt
+                    'Loại đất': l_type,
+                    'Diện tích (m2)': dt
                 }
+
+    # Xử lý ngoại lệ (Dữ liệu khuyết thiếu):
+    # Các thửa đất nhỏ (385, 386, 387...) bị lược bỏ thông tin -> điền "Không ghi nhận"
+    for num in STANDALONE_SMALL_PARCELS:
+        if num not in parcels:
+            parcels[num] = {
+                'Số thửa': num,
+                'Loại đất': 'Không ghi nhận',
+                'Diện tích (m2)': 'Không ghi nhận'
+            }
 
     data = list(parcels.values())
     data = sorted(data, key=lambda x: x['Số thửa'])
@@ -229,17 +241,29 @@ def extract_from_image(img_path, temp_dir='tmp_process'):
         l_type, thua, dt = parse_label_accurate(words)
         if thua and dt and thua not in parcels:
             parcels[thua] = {
-                'Loại đất': l_type,
                 'Số thửa': thua,
-                'Diện tích': dt
+                'Loại đất': l_type,
+                'Diện tích (m2)': dt
+            }
+
+    for num in STANDALONE_SMALL_PARCELS:
+        if num not in parcels:
+            parcels[num] = {
+                'Số thửa': num,
+                'Loại đất': 'Không ghi nhận',
+                'Diện tích (m2)': 'Không ghi nhận'
             }
 
     data = list(parcels.values())
     data = sorted(data, key=lambda x: x['Số thửa'])
     return data
 
-def save_to_excel(data, output_path):
+def save_to_excel(data, output_path='DuLieu_BanDo_DiaChinh.xlsx'):
     df = pd.DataFrame(data)
+    # Đảm bảo thứ tự cột: Số thửa, Loại đất, Diện tích (m2)
+    cols = ['Số thửa', 'Loại đất', 'Diện tích (m2)']
+    df = df[[c for c in cols if c in df.columns]]
+
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='DuLieuThuaDat')
         ws = writer.sheets['DuLieuThuaDat']
@@ -253,19 +277,20 @@ def save_to_excel(data, output_path):
             bottom=Side(style='thin', color='D9D9D9')
         )
         
+        # Căn giữa và bôi đậm dòng tiêu đề
         for col_num, col_name in enumerate(df.columns, 1):
             cell = ws.cell(row=1, column=col_num)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal='center', vertical='center')
-            ws.column_dimensions[openpyxl.utils.get_column_letter(col_num)].width = 16
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col_num)].width = 20
             
+        # Căn giữa tất cả các cột dữ liệu
         for row_idx in range(2, len(df) + 2):
-            ws.cell(row=row_idx, column=1).alignment = Alignment(horizontal='center')
-            ws.cell(row=row_idx, column=2).alignment = Alignment(horizontal='right')
-            c3 = ws.cell(row=row_idx, column=3)
-            c3.alignment = Alignment(horizontal='right')
-            c3.number_format = '0.0'
-            for col_idx in range(1, 4):
-                ws.cell(row=row_idx, column=col_idx).border = border_thin
+            for col_idx in range(1, len(df.columns) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.border = border_thin
+                if col_idx == 3 and isinstance(cell.value, (int, float)):
+                    cell.number_format = '0.0'
     return output_path

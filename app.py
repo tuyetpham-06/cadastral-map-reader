@@ -17,7 +17,7 @@ PREVIEW_FOLDER = os.path.join(os.path.dirname(__file__), 'previews')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PREVIEW_FOLDER, exist_ok=True)
 
-LATEST_DATA_FILE = os.path.join(os.path.dirname(__file__), 'ket_qua_ban_do.xlsx')
+LATEST_DATA_FILE = os.path.join(os.path.dirname(__file__), 'DuLieu_BanDo_DiaChinh.xlsx')
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -101,19 +101,19 @@ HTML_TEMPLATE = """
         .card {
             background: var(--card-bg);
             border-radius: 12px;
-            border: 1px solid var(--border);
-            padding: 24px;
             box-shadow: var(--shadow);
+            padding: 24px;
+            border: 1px solid var(--border);
         }
 
         .card h2 {
-            font-size: 17px;
+            font-size: 18px;
             font-weight: 600;
             margin-bottom: 16px;
-            color: #111827;
             display: flex;
             align-items: center;
             gap: 8px;
+            color: var(--text-main);
         }
 
         .dropzone {
@@ -133,8 +133,8 @@ HTML_TEMPLATE = """
 
         .dropzone-icon {
             font-size: 40px;
-            color: #6b7280;
-            margin-bottom: 10px;
+            color: var(--primary);
+            margin-bottom: 12px;
         }
 
         .dropzone p {
@@ -162,8 +162,7 @@ HTML_TEMPLATE = """
             border-radius: 8px;
             border: none;
             cursor: pointer;
-            transition: all 0.2s ease;
-            text-decoration: none;
+            transition: all 0.2s;
         }
 
         .btn-primary {
@@ -171,6 +170,7 @@ HTML_TEMPLATE = """
             color: white;
             width: 100%;
             margin-top: 16px;
+            padding: 12px;
         }
 
         .btn-primary:hover {
@@ -180,21 +180,20 @@ HTML_TEMPLATE = """
         .btn-excel {
             background: #107c41;
             color: white;
-            padding: 9px 16px;
+            border: 1px solid rgba(255,255,255,0.2);
         }
 
         .btn-excel:hover {
-            background: #0d6334;
+            background: #0b5a2f;
         }
 
         .btn-secondary {
-            background: #f3f4f6;
-            color: #374151;
-            border: 1px solid #d1d5db;
+            background: #e5e7eb;
+            color: var(--text-main);
         }
 
         .btn-secondary:hover {
-            background: #e5e7eb;
+            background: #d1d5db;
         }
 
         .btn-warning {
@@ -253,7 +252,7 @@ HTML_TEMPLATE = """
             width: 100%;
             border-collapse: collapse;
             font-size: 14px;
-            text-align: left;
+            text-align: center;
         }
 
         th {
@@ -265,11 +264,13 @@ HTML_TEMPLATE = """
             top: 0;
             border-bottom: 1px solid var(--border);
             z-index: 10;
+            text-align: center;
         }
 
         td {
             padding: 10px 14px;
             border-bottom: 1px solid var(--border);
+            text-align: center;
         }
 
         tr:hover {
@@ -284,6 +285,7 @@ HTML_TEMPLATE = """
             background: transparent;
             font-size: 14px;
             color: inherit;
+            text-align: center;
         }
 
         .editable-cell:focus {
@@ -310,30 +312,14 @@ HTML_TEMPLATE = """
             cursor: pointer;
         }
 
-        .spinner {
-            display: inline-block;
-            width: 18px;
-            height: 18px;
-            border: 3px solid rgba(255,255,255,.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
         .empty-state {
-            padding: 48px 16px;
             text-align: center;
+            padding: 48px 16px;
             color: #9ca3af;
-            font-size: 14px;
         }
 
         .alert-box {
-            background: #ecfdf5;
-            border: 1px solid #a7f3d0;
+            background-color: #d1fae5;
             color: #065f46;
             padding: 12px 16px;
             border-radius: 8px;
@@ -350,11 +336,11 @@ HTML_TEMPLATE = """
         <header>
             <div>
                 <h1>🗺️ Hệ Thống Trích Xuất Bản Đồ Địa Chính Ra Excel</h1>
-                <p>Tự động nhận diện Loại đất, Số thửa, Diện tích từ file bản đồ (PDF / Ảnh)</p>
+                <p>Tự động nhận diện Số thửa, Loại đất, Diện tích (m²) từ file bản đồ (PDF / Ảnh)</p>
             </div>
             <div>
                 <button class="btn btn-excel" onclick="exportExcel()">
-                    📥 Tải File Excel (.xlsx)
+                    📥 Tải File Excel (DuLieu_BanDo_DiaChinh.xlsx)
                 </button>
             </div>
         </header>
@@ -405,11 +391,11 @@ HTML_TEMPLATE = """
                     <table>
                         <thead>
                             <tr>
-                                <th style="width: 50px; text-align: center;">STT</th>
-                                <th style="width: 140px;">Loại đất</th>
+                                <th style="width: 50px;">STT</th>
                                 <th style="width: 120px;">Số thửa</th>
+                                <th style="width: 140px;">Loại đất</th>
                                 <th style="width: 140px;">Diện tích (m²)</th>
-                                <th style="width: 80px; text-align: center;">Thao tác</th>
+                                <th style="width: 80px;">Thao tác</th>
                             </tr>
                         </thead>
                         <tbody id="tableBody">
@@ -424,79 +410,77 @@ HTML_TEMPLATE = """
         let currentParcels = [];
         let selectedFile = null;
 
-        window.addEventListener('DOMContentLoaded', () => {
-            setupDropzone();
-            renderTable();
+        const dropzone = document.getElementById('dropzone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.classList.add('dragover');
         });
 
-        function showAlert(msg) {
-            const alertBox = document.getElementById('statusAlert');
-            const alertMsg = document.getElementById('alertMessage');
-            alertMsg.innerHTML = msg;
-            alertBox.style.display = 'flex';
-        }
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.classList.remove('dragover');
+        });
 
-        function setupDropzone() {
-            const dz = document.getElementById('dropzone');
-            const fileInput = document.getElementById('fileInput');
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                handleFileSelect(e.dataTransfer.files[0]);
+            }
+        });
 
-            dz.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                dz.classList.add('dragover');
-            });
-
-            dz.addEventListener('dragleave', () => {
-                dz.classList.remove('dragover');
-            });
-
-            dz.addEventListener('drop', (e) => {
-                e.preventDefault();
-                dz.classList.remove('dragover');
-                if (e.dataTransfer.files.length > 0) {
-                    handleFileSelect(e.dataTransfer.files[0]);
-                }
-            });
-
-            fileInput.addEventListener('change', (e) => {
-                if (e.target.files.length > 0) {
-                    handleFileSelect(e.target.files[0]);
-                }
-            });
-        }
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
 
         function handleFileSelect(file) {
             selectedFile = file;
-            const fileInfo = document.getElementById('fileInfo');
             fileInfo.style.display = 'block';
             fileInfo.innerHTML = `📁 Đã chọn: <b>${file.name}</b> (${(file.size / 1024).toFixed(1)} KB)`;
+            
+            // Xóa sạch bảng kết quả cũ để sẵn sàng nhận dữ liệu mới từ file này
+            resetWorkspace();
+        }
+
+        function showAlert(msg) {
+            const box = document.getElementById('statusAlert');
+            document.getElementById('alertMessage').innerHTML = msg;
+            box.style.display = 'flex';
+            setTimeout(() => { box.style.display = 'none'; }, 6000);
         }
 
         async function uploadAndProcess() {
             if (!selectedFile) {
-                alert('Vui lòng chọn hoặc kéo thả 1 file bản đồ (PDF hoặc ảnh)!');
+                alert('Vui lòng chọn hoặc kéo thả file bản đồ trước khi bấm bắt đầu!');
                 return;
             }
 
             const btn = document.getElementById('btnUpload');
             const originalText = btn.innerHTML;
-            btn.innerHTML = '<span class="spinner"></span> Đang đọc dữ liệu...';
+            btn.innerHTML = '⏳ Đang đọc dữ liệu...';
             btn.disabled = true;
 
             const formData = new FormData();
             formData.append('file', selectedFile);
 
             try {
-                const res = await fetch('/api/upload', {
+                const response = await fetch('/api/upload', {
                     method: 'POST',
                     body: formData
                 });
-                if (!res.ok) {
-                    const errorText = await res.text();
-                    throw new Error(`Lỗi máy chủ (${res.status}): ${errorText.substring(0, 100) || 'Hết thời gian chờ (Timeout)'}`);
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(`Lỗi máy chủ (${response.status}): ${text.slice(0, 100)}`);
                 }
-                const result = await res.json();
+
+                const result = await response.json();
+
                 if (result.success) {
-                    // Luôn chỉ hiển thị dữ liệu của file mới đọc (thay thế hoàn toàn dữ liệu cũ)
                     currentParcels = result.parcels;
                     renderTable();
 
@@ -532,22 +516,23 @@ HTML_TEMPLATE = """
             }
 
             currentParcels.forEach((p, idx) => {
-                const dt = parseFloat(p['Diện tích']) || 0;
+                const rawDt = p['Diện tích (m2)'] !== undefined ? p['Diện tích (m2)'] : p['Diện tích'];
+                const dt = parseFloat(rawDt) || 0;
                 totalArea += dt;
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td style="text-align: center; color: #6b7280; font-weight: 500;">${idx + 1}</td>
-                    <td>
-                        <input type="text" class="editable-cell" value="${p['Loại đất'] || ''}" onchange="updateCell(${idx}, 'Loại đất', this.value)">
-                    </td>
+                    <td style="color: #6b7280; font-weight: 500;">${idx + 1}</td>
                     <td>
                         <input type="number" class="editable-cell" value="${p['Số thửa'] || ''}" onchange="updateCell(${idx}, 'Số thửa', this.value)">
                     </td>
                     <td>
-                        <input type="number" step="0.1" class="editable-cell" value="${p['Diện tích'] !== undefined ? p['Diện tích'] : ''}" onchange="updateCell(${idx}, 'Diện tích', this.value)">
+                        <input type="text" class="editable-cell" value="${p['Loại đất'] || ''}" onchange="updateCell(${idx}, 'Loại đất', this.value)">
                     </td>
-                    <td style="text-align: center;">
+                    <td>
+                        <input type="text" class="editable-cell" value="${rawDt !== undefined ? rawDt : ''}" onchange="updateCell(${idx}, 'Diện tích (m2)', this.value)">
+                    </td>
+                    <td>
                         <button class="btn btn-danger" onclick="deleteRow(${idx})">Xóa</button>
                     </td>
                 `;
@@ -561,8 +546,9 @@ HTML_TEMPLATE = """
         function updateCell(idx, field, value) {
             if (field === 'Số thửa') {
                 currentParcels[idx][field] = parseInt(value) || value;
-            } else if (field === 'Diện tích') {
-                currentParcels[idx][field] = parseFloat(value) || value;
+            } else if (field === 'Diện tích (m2)' || field === 'Diện tích') {
+                const num = parseFloat(value);
+                currentParcels[idx]['Diện tích (m2)'] = isNaN(num) ? value.trim() : num;
             } else {
                 currentParcels[idx][field] = value.trim();
             }
@@ -576,9 +562,9 @@ HTML_TEMPLATE = """
 
         function addNewRow() {
             currentParcels.push({
-                'Loại đất': 'ODT',
                 'Số thửa': currentParcels.length > 0 ? (Math.max(...currentParcels.map(p => Number(p['Số thửa']) || 0)) + 1) : 1,
-                'Diện tích': 100.0
+                'Loại đất': 'ODT',
+                'Diện tích (m2)': 100.0
             });
             renderTable();
         }
@@ -604,28 +590,34 @@ HTML_TEMPLATE = """
 
         async function exportExcel() {
             if (currentParcels.length === 0) {
-                alert('Không có dữ liệu để xuất Excel!');
+                alert('Chưa có dữ liệu để xuất Excel! Hãy tải lên bản đồ và đọc trước.');
                 return;
             }
 
             try {
-                const res = await fetch('/api/export', {
+                const response = await fetch('/api/export', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({parcels: currentParcels})
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parcels: currentParcels })
                 });
-                const blob = await res.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'ket_qua_ban_do.xlsx';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
 
-                // YÊU CẦU: Xuất file rồi thì xóa dữ liệu cũ để chuẩn bị đọc file mới
-                resetWorkspace();
-                showAlert('🎉 <b>Đã tải file Excel về máy thành công!</b> Toàn bộ dữ liệu cũ đã được xóa sạch để sẵn sàng đọc file bản đồ tiếp theo.');
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'DuLieu_BanDo_DiaChinh.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+
+                    // Tự động xóa dữ liệu sau khi xuất file thành công
+                    resetWorkspace();
+                    showAlert('📥 <b>Đã tải file Excel thành công!</b> Bảng dữ liệu đã được làm sạch để sẵn sàng cho bản đồ tiếp theo.');
+                } else {
+                    alert('Lỗi xuất Excel từ máy chủ!');
+                }
             } catch (err) {
                 alert('Lỗi xuất Excel: ' + err.message);
             }
@@ -701,9 +693,9 @@ def serve_preview(filename):
 @app.route('/api/export', methods=['POST'])
 def handle_export():
     data = request.json.get('parcels', [])
-    temp_excel = os.path.join(UPLOAD_FOLDER, 'export_result.xlsx')
+    temp_excel = os.path.join(UPLOAD_FOLDER, 'DuLieu_BanDo_DiaChinh.xlsx')
     save_to_excel(data, temp_excel)
-    return send_file(temp_excel, as_attachment=True, download_name='ket_qua_ban_do.xlsx')
+    return send_file(temp_excel, as_attachment=True, download_name='DuLieu_BanDo_DiaChinh.xlsx')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
