@@ -6,7 +6,10 @@ from flask import Flask, request, jsonify, send_file, render_template_string
 import openpyxl
 from extractor import extract_from_pdf, extract_from_image, save_to_excel
 from PIL import Image
-import pymupdf
+try:
+    import pymupdf
+except ImportError:
+    import fitz as pymupdf
 
 app = Flask(__name__)
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
@@ -58,7 +61,7 @@ HTML_TEMPLATE = """
         header {
             background: linear-gradient(135deg, #107c41 0%, #1e8e3e 100%);
             color: white;
-            padding: 28px 32px;
+            padding: 24px 32px;
             border-radius: 14px;
             box-shadow: var(--shadow);
             margin-bottom: 24px;
@@ -70,7 +73,7 @@ HTML_TEMPLATE = """
         }
 
         header h1 {
-            font-size: 24px;
+            font-size: 22px;
             font-weight: 700;
             display: flex;
             align-items: center;
@@ -104,7 +107,7 @@ HTML_TEMPLATE = """
         }
 
         .card h2 {
-            font-size: 18px;
+            font-size: 17px;
             font-weight: 600;
             margin-bottom: 16px;
             color: #111827;
@@ -131,7 +134,7 @@ HTML_TEMPLATE = """
         .dropzone-icon {
             font-size: 40px;
             color: #6b7280;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
 
         .dropzone p {
@@ -148,28 +151,12 @@ HTML_TEMPLATE = """
             display: none;
         }
 
-        .upload-options {
-            margin-top: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .option-radio {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 14px;
-            color: var(--text-sub);
-            cursor: pointer;
-        }
-
         .btn {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
-            padding: 11px 18px;
+            padding: 10px 18px;
             font-size: 14px;
             font-weight: 600;
             border-radius: 8px;
@@ -210,6 +197,16 @@ HTML_TEMPLATE = """
             background: #e5e7eb;
         }
 
+        .btn-warning {
+            background: #fef3c7;
+            color: #92400e;
+            border: 1px solid #fde68a;
+        }
+
+        .btn-warning:hover {
+            background: #fde68a;
+        }
+
         .btn-danger {
             background: #fee2e2;
             color: #b91c1c;
@@ -233,7 +230,7 @@ HTML_TEMPLATE = """
 
         .stat-badges {
             display: flex;
-            gap: 12px;
+            gap: 10px;
         }
 
         .badge {
@@ -328,9 +325,23 @@ HTML_TEMPLATE = """
         }
 
         .empty-state {
-            padding: 40px;
+            padding: 48px 16px;
             text-align: center;
             color: #9ca3af;
+            font-size: 14px;
+        }
+
+        .alert-box {
+            background: #ecfdf5;
+            border: 1px solid #a7f3d0;
+            color: #065f46;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
     </style>
 </head>
@@ -339,7 +350,7 @@ HTML_TEMPLATE = """
         <header>
             <div>
                 <h1>🗺️ Hệ Thống Trích Xuất Bản Đồ Địa Chính Ra Excel</h1>
-                <p>Tự động nhận diện Loại đất, Số thửa, Diện tích từ file PDF / ảnh bản đồ</p>
+                <p>Tự động nhận diện Loại đất, Số thửa, Diện tích từ file bản đồ (PDF / Ảnh)</p>
             </div>
             <div>
                 <button class="btn btn-excel" onclick="exportExcel()">
@@ -348,9 +359,14 @@ HTML_TEMPLATE = """
             </div>
         </header>
 
+        <div id="statusAlert" class="alert-box" style="display: none;">
+            <span id="alertMessage"></span>
+            <button onclick="document.getElementById('statusAlert').style.display='none'" style="background:none; border:none; cursor:pointer; font-weight:bold; color:inherit;">✕</button>
+        </div>
+
         <div class="grid">
             <div class="card">
-                <h2>📤 Tải Lên Bản Đồ</h2>
+                <h2>📤 Tải Lên Bản Đồ Mới</h2>
                 <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
                     <div class="dropzone-icon">📄</div>
                     <p>Kéo thả file bản đồ vào đây hoặc <span>chọn file</span></p>
@@ -358,18 +374,7 @@ HTML_TEMPLATE = """
                     <input type="file" id="fileInput" class="file-input" accept=".pdf,.png,.jpg,.jpeg">
                 </div>
 
-                <div id="fileInfo" style="margin-top: 12px; font-size: 13px; font-weight: 500; display: none;"></div>
-
-                <div class="upload-options">
-                    <label class="option-radio">
-                        <input type="radio" name="uploadMode" value="replace" checked>
-                        <span>Ghi đè danh sách hiện tại</span>
-                    </label>
-                    <label class="option-radio">
-                        <input type="radio" name="uploadMode" value="append">
-                        <span>Nối tiếp (Thêm vào danh sách đã có)</span>
-                    </label>
-                </div>
+                <div id="fileInfo" style="margin-top: 12px; font-size: 13px; font-weight: 500; display: none; color: #047857;"></div>
 
                 <button class="btn btn-primary" id="btnUpload" onclick="uploadAndProcess()">
                     ⚡ Bắt Đầu Đọc Bản Đồ
@@ -391,6 +396,7 @@ HTML_TEMPLATE = """
                     </div>
                     <div style="display: flex; gap: 8px;">
                         <button class="btn btn-secondary" onclick="addNewRow()">➕ Thêm dòng</button>
+                        <button class="btn btn-warning" onclick="clearDataManually()">🗑️ Xóa bảng</button>
                         <button class="btn btn-excel" onclick="exportExcel()">📥 Xuất Excel</button>
                     </div>
                 </div>
@@ -419,21 +425,15 @@ HTML_TEMPLATE = """
         let selectedFile = null;
 
         window.addEventListener('DOMContentLoaded', () => {
-            loadInitialData();
             setupDropzone();
+            renderTable();
         });
 
-        async function loadInitialData() {
-            try {
-                const res = await fetch('/api/initial');
-                const data = await res.json();
-                if (data.parcels && data.parcels.length > 0) {
-                    currentParcels = data.parcels;
-                    renderTable();
-                }
-            } catch (err) {
-                console.error(err);
-            }
+        function showAlert(msg) {
+            const alertBox = document.getElementById('statusAlert');
+            const alertMsg = document.getElementById('alertMessage');
+            alertMsg.innerHTML = msg;
+            alertBox.style.display = 'flex';
         }
 
         function setupDropzone() {
@@ -479,13 +479,11 @@ HTML_TEMPLATE = """
 
             const btn = document.getElementById('btnUpload');
             const originalText = btn.innerHTML;
-            btn.innerHTML = '<span class="spinner"></span> Đang xử lý bản đồ...';
+            btn.innerHTML = '<span class="spinner"></span> Đang đọc dữ liệu...';
             btn.disabled = true;
 
-            const mode = document.querySelector('input[name="uploadMode"]:checked').value;
             const formData = new FormData();
             formData.append('file', selectedFile);
-            formData.append('mode', mode);
 
             try {
                 const res = await fetch('/api/upload', {
@@ -494,15 +492,8 @@ HTML_TEMPLATE = """
                 });
                 const result = await res.json();
                 if (result.success) {
-                    if (mode === 'replace') {
-                        currentParcels = result.parcels;
-                    } else {
-                        const existingMap = new Map();
-                        currentParcels.forEach(p => existingMap.set(p['Số thửa'], p));
-                        result.parcels.forEach(p => existingMap.set(p['Số thửa'], p));
-                        currentParcels = Array.from(existingMap.values());
-                        currentParcels.sort((a, b) => (Number(a['Số thửa']) || 0) - (Number(b['Số thửa']) || 0));
-                    }
+                    // Luôn chỉ hiển thị dữ liệu của file mới đọc (thay thế hoàn toàn dữ liệu cũ)
+                    currentParcels = result.parcels;
                     renderTable();
 
                     if (result.preview_url) {
@@ -511,7 +502,7 @@ HTML_TEMPLATE = """
                         mapPreview.src = result.preview_url;
                         previewCard.style.display = 'block';
                     }
-                    alert(`✅ Đã đọc thành công ${result.parcels.length} thửa đất!`);
+                    showAlert(`✅ Đã đọc thành công <b>${result.parcels.length} thửa đất</b> từ file <b>${selectedFile.name}</b>!`);
                 } else {
                     alert('Lỗi: ' + (result.error || 'Không thể xử lý file'));
                 }
@@ -530,7 +521,7 @@ HTML_TEMPLATE = """
             let totalArea = 0;
 
             if (currentParcels.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Chưa có dữ liệu thửa đất. Hãy tải lên file bản đồ.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Chưa có dữ liệu. Vui lòng tải lên file bản đồ mới để tiếp tục.</td></tr>';
                 document.getElementById('badgeCount').innerText = 'Tổng: 0 thửa';
                 document.getElementById('badgeArea').innerText = 'Tổng DT: 0 m²';
                 return;
@@ -588,6 +579,25 @@ HTML_TEMPLATE = """
             renderTable();
         }
 
+        function clearDataManually() {
+            if (currentParcels.length === 0) return;
+            if (confirm('Bạn có chắc muốn xóa sạch dữ liệu trên bảng để nhập file mới?')) {
+                resetWorkspace();
+                showAlert('ℹ️ Đã xóa dữ liệu trên bảng.');
+            }
+        }
+
+        function resetWorkspace() {
+            currentParcels = [];
+            renderTable();
+            selectedFile = null;
+            document.getElementById('fileInput').value = '';
+            const fileInfo = document.getElementById('fileInfo');
+            if (fileInfo) fileInfo.style.display = 'none';
+            const previewCard = document.getElementById('previewCard');
+            if (previewCard) previewCard.style.display = 'none';
+        }
+
         async function exportExcel() {
             if (currentParcels.length === 0) {
                 alert('Không có dữ liệu để xuất Excel!');
@@ -608,6 +618,10 @@ HTML_TEMPLATE = """
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
+
+                // YÊU CẦU: Xuất file rồi thì xóa dữ liệu cũ để chuẩn bị đọc file mới
+                resetWorkspace();
+                showAlert('🎉 <b>Đã tải file Excel về máy thành công!</b> Toàn bộ dữ liệu cũ đã được xóa sạch để sẵn sàng đọc file bản đồ tiếp theo.');
             } catch (err) {
                 alert('Lỗi xuất Excel: ' + err.message);
             }
@@ -627,16 +641,6 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
-
-@app.route('/api/initial', methods=['GET'])
-def get_initial():
-    if os.path.exists(LATEST_DATA_FILE):
-        try:
-            df = pd.read_excel(LATEST_DATA_FILE)
-            return jsonify({'parcels': df.to_dict(orient='records')})
-        except:
-            pass
-    return jsonify({'parcels': []})
 
 @app.route('/api/upload', methods=['POST'])
 def handle_upload():
