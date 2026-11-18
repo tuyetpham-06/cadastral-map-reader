@@ -442,8 +442,11 @@ HTML_TEMPLATE = """
             fileInfo.style.display = 'block';
             fileInfo.innerHTML = `📁 Đã chọn: <b>${file.name}</b> (${(file.size / 1024).toFixed(1)} KB)`;
             
-            // Xóa sạch bảng kết quả cũ để sẵn sàng nhận dữ liệu mới từ file này
-            resetWorkspace();
+            // Chỉ làm sạch bảng kết quả cũ để chuẩn bị đọc file mới (KHÔNG xóa selectedFile)
+            currentParcels = [];
+            renderTable();
+            const previewCard = document.getElementById('previewCard');
+            if (previewCard) previewCard.style.display = 'none';
         }
 
         function showAlert(msg) {
