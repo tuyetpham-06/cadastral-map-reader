@@ -18,72 +18,55 @@ STANDARD_LAND_TYPES = {
     'DSH', 'DCH', 'DGD', 'DYT', 'DXH', 'DTT', 'DVH'
 }
 
-def clean_land_type(raw):
-    if not raw:
-        return ''
-    s = raw.upper().strip()
-    s = s.replace('*', '+').replace(' ', '').replace('·', '+')
-    s = re.sub(r'^[|!Il1/]+', '', s)
-    s = re.sub(r'[^A-Z\+0-9]', '', s)
-    
-    replacements = {
-        'ODD': 'ODT', 'ODF': 'ODT', '0DT': 'ODT', 'QDT': 'ODT', 'CPT': 'ODT',
-        'LUG': 'LUC', 'LU0': 'LUC',
-        '8HK': 'BHK', 'BHI<': 'BHK', 'BHI': 'BHK',
-        'LUK': 'LUK', 'DGT': 'DGT', 'CLN': 'CLN'
-    }
-    parts = s.split('+')
-    clean_parts = []
-    for p in parts:
-        fixed = replacements.get(p, p)
-        clean_parts.append(fixed)
-    return '+'.join(clean_parts)
+def get_land_type(text):
+    up = text.upper().replace('*', '+')
+    if 'ODT+CLN' in up or (('ODT' in up or 'DT' in up) and 'CLN' in up):
+        return 'ODT+CLN'
+    if 'BHK' in up or '8HK' in up:
+        return 'BHK'
+    if 'LUC' in up:
+        return 'LUC'
+    if 'LUK' in up:
+        return 'LUK'
+    if 'DGT' in up:
+        return 'DGT'
+    if 'ODT' in up or 'ODF' in up or 'ODP' in up or 'ODD' in up:
+        return 'ODT'
+    if 'CLN' in up:
+        return 'CLN'
+    return 'ODT'
 
-def parse_label_text(lines):
+def parse_label_accurate(lines):
     full = ' '.join(lines)
-    # Match inline pattern: [LandType] [Thửa] / [Diện tích]
-    m = re.search(r'([A-Za-z\+\*]{2,10})\s*(\d{1,5})\s*[/\\|\-\s]?\s*(\d+(?:\.\d+)?)', full)
-    if m:
-        l_type = clean_land_type(m.group(1))
-        thua = int(m.group(2))
-        try:
-            dt = float(m.group(3))
-        except:
-            dt = None
-        if thua > 0 and dt and dt > 0:
-            return l_type, thua, dt
+    # Fix common OCR artifacts for digits like '41 z 2' -> '417.2'
+    full = re.sub(r'(\d+)\s*[zZ]\s*(\d)\b', r'\1.\2', full)
+    full = full.replace('*', '+')
 
-    thua = None
-    dt = None
-    l_type = ''
-    
-    for word in re.findall(r'[A-Za-z\+]{2,10}', full):
-        cl = clean_land_type(word)
-        if any(t in cl for t in STANDARD_LAND_TYPES) or '+' in cl:
-            l_type = cl
-            break
-
+    # 1. Tìm diện tích (bắt buộc phải là số thực có phần thập phân: ví dụ 105.8, 417.2, 501.2)
     floats = re.findall(r'\b\d+\.\d+\b', full)
-    if floats:
-        try:
-            val_dt = float(floats[0])
-            if val_dt > 0:
-                dt = val_dt
-        except:
-            pass
+    if not floats:
+        return None, None, None
+    dt = float(floats[0])
 
-    ints = re.findall(r'\b\d{1,5}\b', full)
-    for i in ints:
-        val = int(i)
-        if val <= 0:
-            continue
-        if dt and str(val) in str(dt):
-            continue
-        thua = val
-        break
+    # 2. Xóa chuỗi diện tích khỏi văn bản để tránh lấy nhầm các chữ số của diện tích làm số thửa
+    text_no_dt = full.replace(floats[0], ' ')
 
-    if thua and thua > 0 and dt and dt > 0:
+    # 3. Lấy loại đất chuẩn
+    l_type = get_land_type(text_no_dt)
+
+    # 4. Tìm số thửa (là số nguyên từ 10 đến 9999 hoặc 1 đến 9999)
+    ints = re.findall(r'\b\d{2,4}\b', text_no_dt)
+    if not ints:
+        ints = re.findall(r'\b\d{1,4}\b', text_no_dt)
+    if not ints:
+        return None, None, None
+
+    thua = int(ints[0])
+
+    # Thửa đất và diện tích phải hợp lệ
+    if thua >= 1 and dt >= 5.0:
         return l_type, thua, dt
+
     return None, None, None
 
 async def run_ocr_winrt_multi(image_list, engine):
@@ -121,10 +104,6 @@ def run_ocr_tesseract_multi(image_list):
     return results
 
 def run_ocr_batch(image_list):
-    """
-    Batches OCR calls using Windows OCR (WinRT) if available,
-    otherwise uses Tesseract.
-    """
     try:
         from winsdk.windows.media.ocr import OcrEngine
         engine = OcrEngine.try_create_from_user_profile_languages()
@@ -152,49 +131,40 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
         if len(items) == 1 and items[0][0] == 'l':
             p1, p2 = items[0][1], items[0][2]
             length = math.hypot(p2.x - p1.x, p2.y - p1.y)
-            angle = math.degrees(math.atan2(p2.y - p1.y, p2.x - p1.x))
-            if 16.0 <= length <= 36.0:
-                fraction_bars.append((p1, p2, length, angle, d['rect']))
+            if 12.0 <= length <= 40.0:
+                angle = math.degrees(math.atan2(p2.y - p1.y, p2.x - p1.x))
+                # Chuẩn hóa góc nghiêng về khoảng [-90, 90] độ
+                angle = (angle + 90) % 180 - 90
+                fraction_bars.append((p1, p2, length, angle))
 
     crops = []
-    for idx, (p1, p2, length, angle, rect) in enumerate(fraction_bars):
+    for idx, (p1, p2, length, angle) in enumerate(fraction_bars):
         cx_pt = (p1.x + p2.x) / 2
         cy_pt = (p1.y + p2.y) / 2
         cx_px = cx_pt * zoom
         cy_px = cy_pt * zoom
 
         rot_img = full_img.rotate(angle, center=(cx_px, cy_px), resample=Image.BICUBIC)
-        box_left = max(0, cx_px - 90 * zoom)
-        box_top = max(0, cy_px - 40 * zoom)
-        box_right = min(full_img.width, cx_px + 40 * zoom)
-        box_bottom = min(full_img.height, cy_px + 40 * zoom)
+        # Cắt chính xác khung bao quanh phân số và loại đất
+        box_left = max(0, cx_px - 75 * zoom)
+        box_top = max(0, cy_px - 22 * zoom)
+        box_right = min(full_img.width, cx_px + 25 * zoom)
+        box_bottom = min(full_img.height, cy_px + 22 * zoom)
 
         cropped = rot_img.crop((box_left, box_top, box_right, box_bottom))
         crops.append(cropped)
 
-    # Fast batch OCR on all crops
+    # Chạy nhận dạng OCR
     crop_results = run_ocr_batch(crops)
     parcels = {}
 
     for lines in crop_results:
-        l_type, thua, dt = parse_label_text(lines)
-        if thua and dt and thua > 0 and dt > 0:
-            if thua not in parcels or (not parcels[thua]['Loại đất'] and l_type):
+        l_type, thua, dt = parse_label_accurate(lines)
+        if thua and dt:
+            # Nếu chưa có thửa này hoặc thửa mới có loại đất chi tiết hơn
+            if thua not in parcels or (parcels[thua]['Loại đất'] == 'ODT' and l_type != 'ODT'):
                 parcels[thua] = {
-                    'Loại đất': l_type or 'ODT',
-                    'Số thửa': thua,
-                    'Diện tích': dt
-                }
-
-    # Full angle OCR fallback
-    rot_images = [full_img.rotate(ang, expand=True, fillcolor='white') for ang in [0, 75, 270, 285]]
-    full_results = run_ocr_batch(rot_images)
-    for lines in full_results:
-        for l in lines:
-            l_type, thua, dt = parse_label_text([l])
-            if thua and dt and thua > 0 and dt > 0 and thua not in parcels:
-                parcels[thua] = {
-                    'Loại đất': l_type or 'ODT',
+                    'Loại đất': l_type,
                     'Số thửa': thua,
                     'Diện tích': dt
                 }
@@ -211,10 +181,10 @@ def extract_from_image(img_path, temp_dir='tmp_process'):
     results = run_ocr_batch(rot_images)
     for lines in results:
         for l in lines:
-            l_type, thua, dt = parse_label_text([l])
-            if thua and dt and thua > 0 and dt > 0 and thua not in parcels:
+            l_type, thua, dt = parse_label_accurate([l])
+            if thua and dt and thua not in parcels:
                 parcels[thua] = {
-                    'Loại đất': l_type or 'ODT',
+                    'Loại đất': l_type,
                     'Số thửa': thua,
                     'Diện tích': dt
                 }
