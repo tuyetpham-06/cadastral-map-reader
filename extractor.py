@@ -3,12 +3,14 @@ import math
 import os
 import re
 from PIL import Image
-import pymupdf
+try:
+    import pymupdf
+except ImportError:
+    import fitz as pymupdf
 import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import openpyxl
 
-# Supported land types according to Vietnam Cadastral regulations (TT 25/2014/TT-BTNMT)
 STANDARD_LAND_TYPES = {
     'ODT', 'ONT', 'CLN', 'HNK', 'LUC', 'LUK', 'BHK', 'DGT', 'DTL',
     'RSX', 'RPH', 'RDD', 'NTS', 'LMU', 'SKC', 'SKK', 'SKN', 'TMD',
@@ -48,7 +50,8 @@ def parse_label_text(lines):
             dt = float(m.group(3))
         except:
             dt = None
-        return l_type, thua, dt
+        if thua > 0 and dt and dt > 0:
+            return l_type, thua, dt
 
     thua = None
     dt = None
@@ -62,63 +65,75 @@ def parse_label_text(lines):
 
     floats = re.findall(r'\b\d+\.\d+\b', full)
     if floats:
-        dt = float(floats[0])
+        try:
+            val_dt = float(floats[0])
+            if val_dt > 0:
+                dt = val_dt
+        except:
+            pass
 
     ints = re.findall(r'\b\d{1,5}\b', full)
     for i in ints:
         val = int(i)
+        if val <= 0:
+            continue
         if dt and str(val) in str(dt):
             continue
         thua = val
         break
 
-    return l_type, thua, dt
+    if thua and thua > 0 and dt and dt > 0:
+        return l_type, thua, dt
+    return None, None, None
 
-def run_ocr_cross_platform(image_input):
+async def run_ocr_winrt_multi(image_list, engine):
+    from winsdk.windows.graphics.imaging import BitmapDecoder
+    from winsdk.windows.storage import StorageFile
+
+    results = []
+    for idx, img in enumerate(image_list):
+        tmp_p = f'_tmp_crop_{idx}.png'
+        img.save(tmp_p)
+        try:
+            f = await StorageFile.get_file_from_path_async(os.path.abspath(tmp_p))
+            stream = await f.open_async(0)
+            dec = await BitmapDecoder.create_async(stream)
+            sb = await dec.get_software_bitmap_async()
+            res = await engine.recognize_async(sb)
+            results.append([l.text.strip() for l in res.lines if l.text.strip()])
+        except Exception:
+            results.append([])
+        finally:
+            if os.path.exists(tmp_p):
+                try: os.remove(tmp_p)
+                except: pass
+    return results
+
+def run_ocr_tesseract_multi(image_list):
+    import pytesseract
+    results = []
+    for img in image_list:
+        try:
+            text = pytesseract.image_to_string(img, config='--psm 6')
+            results.append([l.strip() for l in text.split('\n') if l.strip()])
+        except:
+            results.append([])
+    return results
+
+def run_ocr_batch(image_list):
     """
-    Cross-platform OCR:
-    - Uses Windows native OCR (winsdk) on Windows if available.
-    - Uses Tesseract (pytesseract) on Linux (Docker / Render) as fallback.
+    Batches OCR calls using Windows OCR (WinRT) if available,
+    otherwise uses Tesseract.
     """
-    # 1. Try Windows WinRT OCR
     try:
         from winsdk.windows.media.ocr import OcrEngine
-        from winsdk.windows.graphics.imaging import BitmapDecoder
-        from winsdk.windows.storage import StorageFile
-
-        async def _win_ocr(path):
-            engine = OcrEngine.try_create_from_user_profile_languages()
-            file = await StorageFile.get_file_from_path_async(os.path.abspath(path))
-            stream = await file.open_async(0)
-            decoder = await BitmapDecoder.create_async(stream)
-            sb = await decoder.get_software_bitmap_async()
-            result = await engine.recognize_async(sb)
-            return [l.text.strip() for l in result.lines if l.text.strip()]
-
-        if isinstance(image_input, str):
-            return asyncio.run(_win_ocr(image_input))
-        else:
-            temp_p = '_tmp_ocr.png'
-            image_input.save(temp_p)
-            lines = asyncio.run(_win_ocr(temp_p))
-            if os.path.exists(temp_p):
-                os.remove(temp_p)
-            return lines
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        if engine:
+            return asyncio.run(run_ocr_winrt_multi(image_list, engine))
     except Exception:
         pass
 
-    # 2. Try Tesseract (Standard for Linux / Render Cloud)
-    try:
-        import pytesseract
-        if isinstance(image_input, str):
-            img = Image.open(image_input)
-        else:
-            img = image_input
-        text = pytesseract.image_to_string(img, config='--psm 6')
-        return [l.strip() for l in text.split('\n') if l.strip()]
-    except Exception as e:
-        print(f"OCR error: {e}")
-        return []
+    return run_ocr_tesseract_multi(image_list)
 
 def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
     os.makedirs(temp_dir, exist_ok=True)
@@ -141,8 +156,7 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
             if 16.0 <= length <= 36.0:
                 fraction_bars.append((p1, p2, length, angle, d['rect']))
 
-    parcels = {}
-
+    crops = []
     for idx, (p1, p2, length, angle, rect) in enumerate(fraction_bars):
         cx_pt = (p1.x + p2.x) / 2
         cy_pt = (p1.y + p2.y) / 2
@@ -156,25 +170,31 @@ def extract_from_pdf(pdf_path, temp_dir='tmp_process'):
         box_bottom = min(full_img.height, cy_px + 40 * zoom)
 
         cropped = rot_img.crop((box_left, box_top, box_right, box_bottom))
-        lines = run_ocr_cross_platform(cropped)
+        crops.append(cropped)
+
+    # Fast batch OCR on all crops
+    crop_results = run_ocr_batch(crops)
+    parcels = {}
+
+    for lines in crop_results:
         l_type, thua, dt = parse_label_text(lines)
-        if thua is not None and dt is not None:
+        if thua and dt and thua > 0 and dt > 0:
             if thua not in parcels or (not parcels[thua]['Loại đất'] and l_type):
                 parcels[thua] = {
-                    'Loại đất': l_type,
+                    'Loại đất': l_type or 'ODT',
                     'Số thửa': thua,
                     'Diện tích': dt
                 }
 
-    # Multi-angle OCR fallback
-    for angle in [0, 75, 270, 285]:
-        rot = full_img.rotate(angle, expand=True, fillcolor='white')
-        lines = run_ocr_cross_platform(rot)
+    # Full angle OCR fallback
+    rot_images = [full_img.rotate(ang, expand=True, fillcolor='white') for ang in [0, 75, 270, 285]]
+    full_results = run_ocr_batch(rot_images)
+    for lines in full_results:
         for l in lines:
             l_type, thua, dt = parse_label_text([l])
-            if thua and dt and thua not in parcels:
+            if thua and dt and thua > 0 and dt > 0 and thua not in parcels:
                 parcels[thua] = {
-                    'Loại đất': l_type,
+                    'Loại đất': l_type or 'ODT',
                     'Số thửa': thua,
                     'Diện tích': dt
                 }
@@ -187,14 +207,14 @@ def extract_from_image(img_path, temp_dir='tmp_process'):
     full_img = Image.open(img_path)
     parcels = {}
 
-    for angle in [0, 72, 75, 90, 270, 285]:
-        rot = full_img.rotate(angle, expand=True, fillcolor='white')
-        lines = run_ocr_cross_platform(rot)
+    rot_images = [full_img.rotate(ang, expand=True, fillcolor='white') for ang in [0, 72, 75, 90, 270, 285]]
+    results = run_ocr_batch(rot_images)
+    for lines in results:
         for l in lines:
             l_type, thua, dt = parse_label_text([l])
-            if thua and dt and thua not in parcels:
+            if thua and dt and thua > 0 and dt > 0 and thua not in parcels:
                 parcels[thua] = {
-                    'Loại đất': l_type,
+                    'Loại đất': l_type or 'ODT',
                     'Số thửa': thua,
                     'Diện tích': dt
                 }
